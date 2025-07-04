@@ -107,11 +107,11 @@ const TaskManagerApp: React.FC = () => {
             {taskStats.completed > 0 && (
               <button
                 onClick={handleClearCompleted}
-                className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 
-                           text-white rounded-lg transition-colors duration-200"
+                className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors duration-200 min-w-0 w-auto"
+                title="清除已完成"
               >
                 <Trash2 size={16} />
-                清除已完成
+                <span className="hidden sm:inline">清除已完成</span>
               </button>
             )}
             
