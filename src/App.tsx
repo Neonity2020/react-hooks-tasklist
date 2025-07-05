@@ -1,92 +1,134 @@
-import React, { useReducer, useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useCallback, useMemo, useState } from 'react';
 import { Sun, Moon, Trash2 } from 'lucide-react';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
-import { taskReducer, initialTaskState } from './reducers/taskReducer';
 import { Task, FilterType } from './types/Task';
 import TaskForm from './components/TaskForm';
 import TaskList from './components/TaskList';
 import TaskStats from './components/TaskStats';
 import TaskFilters from './components/TaskFilters';
+import { supabase } from './supabaseClient';
+import Auth from './components/Auth';
+import type { User } from '@supabase/supabase-js';
+import { getTasks, addTask, toggleTask, deleteTask, clearCompleted } from './api/taskApi';
 
 // 主应用组件
-const TaskManagerApp: React.FC = () => {
+interface TaskManagerAppProps {
+  user: User;
+}
+const TaskManagerApp: React.FC<TaskManagerAppProps> = ({ user }) => {
   const { isDark, toggleTheme } = useTheme();
-  
-  // 📚 useReducer Hook 演示
-  // 用于管理复杂的任务状态，比 useState 更适合处理多个相关状态值
-  const [state, dispatch] = useReducer(taskReducer, initialTaskState);
 
-  // 🎯 useEffect Hook: 处理副作用
-  // 组件挂载时从 localStorage 加载任务数据
-  useEffect(() => {
-    const savedTasks = localStorage.getItem('tasks');
-    if (savedTasks) {
-      try {
-        const parsedTasks: Task[] = JSON.parse(savedTasks);
-        dispatch({ type: 'LOAD_TASKS', payload: { tasks: parsedTasks } });
-      } catch (error) {
-        console.error('Failed to load tasks from localStorage:', error);
-      }
+  // 用于管理任务和过滤条件
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [filter, setFilter] = useState<FilterType>('all');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // 拉取任务
+  const fetchTasks = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await getTasks(user.id);
+      setTasks(data);
+    } catch {
+      setError('任务加载失败');
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }, [user.id]);
 
-  // 🎯 useEffect Hook: 监听任务变化并保存到 localStorage
-  // 依赖数组包含 state.tasks，只有当任务列表变化时才执行
   useEffect(() => {
-    localStorage.setItem('tasks', JSON.stringify(state.tasks));
-  }, [state.tasks]);
+    fetchTasks();
+    // 实时推送订阅
+    const channel = supabase.channel('tasks-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          fetchTasks();
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchTasks, user.id]);
 
-  // 🎯 useCallback Hook: 优化事件处理函数
-  // 防止不必要的重新渲染，特别是当这些函数传递给子组件时
-  const handleAddTask = useCallback((text: string) => {
-    dispatch({ type: 'ADD_TASK', payload: { text } });
-  }, []);
+  // 新增任务
+  const handleAddTask = useCallback(async (text: string) => {
+    try {
+      await addTask(user.id, text);
+      fetchTasks();
+    } catch {
+      setError('添加任务失败');
+    }
+  }, [user.id, fetchTasks]);
 
-  const handleToggleTask = useCallback((id: string) => {
-    dispatch({ type: 'TOGGLE_TASK', payload: { id } });
-  }, []);
+  // 切换完成
+  const handleToggleTask = useCallback(async (id: string) => {
+    try {
+      await toggleTask(user.id, id);
+      fetchTasks();
+    } catch {
+      setError('切换任务状态失败');
+    }
+  }, [user.id, fetchTasks]);
 
-  const handleDeleteTask = useCallback((id: string) => {
-    dispatch({ type: 'DELETE_TASK', payload: { id } });
-  }, []);
+  // 删除任务
+  const handleDeleteTask = useCallback(async (id: string) => {
+    try {
+      await deleteTask(user.id, id);
+      fetchTasks();
+    } catch {
+      setError('删除任务失败');
+    }
+  }, [user.id, fetchTasks]);
 
+  // 过滤条件
   const handleFilterChange = useCallback((filter: FilterType) => {
-    dispatch({ type: 'SET_FILTER', payload: { filter } });
+    setFilter(filter);
   }, []);
 
-  const handleClearCompleted = useCallback(() => {
-    dispatch({ type: 'CLEAR_COMPLETED' });
-  }, []);
-
-  // 🎯 useMemo Hook: 缓存计算结果
-  // 只有当 state.tasks 变化时才重新计算，避免每次渲染都执行计算
-  const taskStats = useMemo(() => {
-    const total = state.tasks.length;
-    const completed = state.tasks.filter(task => task.completed).length;
-    const active = total - completed;
-    
-    return { total, completed, active };
-  }, [state.tasks]);
-
-  // 🎯 useMemo Hook: 缓存过滤后的任务列表
-  // 根据当前过滤条件计算要显示的任务，避免重复计算
-  const filteredTasks = useMemo(() => {
-    switch (state.filter) {
-      case 'active':
-        return state.tasks.filter(task => !task.completed);
-      case 'completed':
-        return state.tasks.filter(task => task.completed);
-      default:
-        return state.tasks;
+  // 清除已完成
+  const handleClearCompleted = useCallback(async () => {
+    try {
+      await clearCompleted(user.id);
+      fetchTasks();
+    } catch {
+      setError('清除已完成任务失败');
     }
-  }, [state.tasks, state.filter]);
+  }, [user.id, fetchTasks]);
 
-  // 🎯 useMemo Hook: 缓存任务计数
+  // 过滤和统计
+  const filteredTasks = useMemo(() => {
+    switch (filter) {
+      case 'active':
+        return tasks.filter(task => !task.completed);
+      case 'completed':
+        return tasks.filter(task => task.completed);
+      default:
+        return tasks;
+    }
+  }, [tasks, filter]);
+
+  const taskStats = useMemo(() => {
+    const total = tasks.length;
+    const completed = tasks.filter(task => task.completed).length;
+    const active = total - completed;
+    return { total, completed, active };
+  }, [tasks]);
+
   const taskCounts = useMemo(() => ({
-    all: state.tasks.length,
-    active: state.tasks.filter(task => !task.completed).length,
-    completed: state.tasks.filter(task => task.completed).length
-  }), [state.tasks]);
+    all: tasks.length,
+    active: tasks.filter(task => !task.completed).length,
+    completed: tasks.filter(task => task.completed).length
+  }), [tasks]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 transition-colors duration-300">
@@ -98,10 +140,9 @@ const TaskManagerApp: React.FC = () => {
               React Hooks 任务管理器
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
-              演示 useState, useEffect, useContext, useReducer, useCallback, useMemo 的使用
+              演示 useState, useEffect, useContext, useCallback, useMemo 的使用
             </p>
           </div>
-          
           <div className="flex items-center gap-4">
             {/* 清除已完成任务按钮 */}
             {taskStats.completed > 0 && (
@@ -114,7 +155,6 @@ const TaskManagerApp: React.FC = () => {
                 <span className="hidden sm:inline">清除已完成</span>
               </button>
             )}
-            
             {/* 主题切换按钮 */}
             <button
               onClick={toggleTheme}
@@ -125,31 +165,20 @@ const TaskManagerApp: React.FC = () => {
             </button>
           </div>
         </div>
-
+        {/* 错误提示 */}
+        {error && <div className="mb-4 text-red-500 text-center">{error}</div>}
         {/* 任务统计 */}
-        <TaskStats
-          total={taskStats.total}
-          completed={taskStats.completed}
-          active={taskStats.active}
-        />
-
+        <TaskStats total={taskStats.total} completed={taskStats.completed} active={taskStats.active} />
         {/* 任务表单 */}
         <TaskForm onAddTask={handleAddTask} />
-
         {/* 任务过滤器 */}
-        <TaskFilters
-          currentFilter={state.filter}
-          onFilterChange={handleFilterChange}
-          taskCounts={taskCounts}
-        />
-
+        <TaskFilters currentFilter={filter} onFilterChange={handleFilterChange} taskCounts={taskCounts} />
         {/* 任务列表 */}
-        <TaskList
-          tasks={filteredTasks}
-          onToggleTask={handleToggleTask}
-          onDeleteTask={handleDeleteTask}
-        />
-
+        {loading ? (
+          <div className="text-center text-gray-500 dark:text-gray-300 py-8">任务加载中...</div>
+        ) : (
+          <TaskList tasks={filteredTasks} onToggleTask={handleToggleTask} onDeleteTask={handleDeleteTask} />
+        )}
         {/* Hook 使用说明 */}
         <div className="mt-12 p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
@@ -167,7 +196,6 @@ const TaskManagerApp: React.FC = () => {
             <div>
               <h3 className="font-semibold text-green-600 dark:text-green-400 mb-2">高级 Hooks</h3>
               <ul className="space-y-2 text-gray-700 dark:text-gray-300">
-                <li><strong>useReducer:</strong> 复杂任务状态管理</li>
                 <li><strong>useCallback:</strong> 优化事件处理函数</li>
                 <li><strong>useMemo:</strong> 缓存计算结果</li>
               </ul>
@@ -181,9 +209,33 @@ const TaskManagerApp: React.FC = () => {
 
 // 根组件，包含主题提供者
 const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // 检查当前登录用户
+    const getUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      setUser(data.user);
+      setLoading(false);
+    };
+    getUser();
+    // 监听登录状态变化
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  if (loading) {
+    return <div className="flex items-center justify-center min-h-screen text-gray-500 dark:text-gray-300">加载中...</div>;
+  }
+
   return (
     <ThemeProvider>
-      <TaskManagerApp />
+      {user ? <TaskManagerApp user={user} /> : <Auth />}
     </ThemeProvider>
   );
 };
