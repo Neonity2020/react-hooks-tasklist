@@ -184,6 +184,18 @@ src/
 - Node.js 16.0 或更高版本
 - npm 或 yarn 包管理器
 
+### Supabase 环境变量配置
+
+1. 在项目根目录下新建 `.env` 文件，内容如下（用你的实际 Supabase 信息替换）：
+
+```env
+VITE_SUPABASE_URL=你的_supabase_url
+VITE_SUPABASE_ANON_KEY=你的_supabase_anon_key
+```
+
+2. `.env` 文件**不要上传到 GitHub**（已在 `.gitignore` 中配置）。
+3. 生产环境部署时，也需在服务器根目录配置 `.env` 文件。
+
 ### 安装依赖
 
 ```bash
